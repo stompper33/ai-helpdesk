@@ -1,0 +1,23 @@
+# Active when SPRING_PROFILES_ACTIVE=docker (set by docker-compose.yml).
+# Overrides the H2 defaults in application.yml with PostgreSQL + Flyway migrations.
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/helpdesk}
+    username: ${DB_USER:helpdesk}
+    password: ${DB_PASSWORD:helpdesk}
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks the entities match it
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  h2:
+    console:
+      enabled: false
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true

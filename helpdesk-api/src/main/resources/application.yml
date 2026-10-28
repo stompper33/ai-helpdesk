@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: helpdesk-api
+  datasource:
+    url: jdbc:h2:mem:helpdesk;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  # H2 uses Hibernate's create-drop above; Flyway migrations run only in the docker profile
+  flyway:
+    enabled: false
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+helpdesk:
+  # Loads demo customers, orders, agents and tickets on startup
+  seed-demo-data: true
+
+# Stage 2: the Python ai-service (see ai-service/README.md)
+ai-service:
+  base-url: ${AI_SERVICE_URL:http://localhost:8000}
+  # Must match SERVICE_API_KEY in ai-service/.env (leave both empty to disable)
+  api-key: ${AI_SERVICE_API_KEY:}
+  connect-timeout: 2s
+  read-timeout: 30s
+  # Suggestions below this confidence are recorded as a comment but not applied
+  min-confidence: 0.6
+  # Stage 3: the reply-drafting agent makes several LLM + tool calls, so allow longer
+  agent:
+    read-timeout: 90s
