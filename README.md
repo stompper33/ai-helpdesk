@@ -35,6 +35,7 @@ The first build takes a few minutes while Maven and pip download dependencies. A
 | helpdesk-api | http://localhost:8080/swagger-ui.html | `docker` profile: PostgreSQL + Flyway |
 | ai-service | http://localhost:8000/docs | OpenAI if `ai-service/.env` has a key, offline rules otherwise |
 | PostgreSQL | `localhost:5432`, db/user/password `helpdesk` | data survives restarts (volume `pgdata`) |
+| RabbitMQ | http://localhost:15672, user/password `helpdesk` | management UI: queues, message rates, dead-letter queues |
 
 Useful commands:
 
@@ -55,6 +56,32 @@ The Postman collections work unchanged. One difference: in Docker, Spring Boot a
 - Healthchecks: Spring Boot waits for Postgres to be healthy, and `docker compose ps` shows readiness for all three services.
 - Schema changes go through **Flyway migrations** (`db/migration/V1__init_schema.sql`), and Hibernate runs with `ddl-auto=validate`, so a mismatch between entities and schema stops startup instead of silently changing the database.
 - Containers talk to each other by service name (`http://ai-service:8000`, `http://helpdesk-api:8080`), configured purely through environment variables.
+
+## Stage 5b: automatic triage over RabbitMQ
+
+In Docker mode, every new ticket is triaged automatically. Nobody needs to call `/ai-triage`.
+
+```
+POST /api/tickets ─► helpdesk-api commits the ticket
+                     └─(after commit)─► [helpdesk.events] ticket.created ─► queue ai.triage.requests
+                                                                               │
+                                          ai-service worker ◄──────────────────┘
+                                          triages it (same code as POST /v1/triage)
+                                          └─► [helpdesk.events] ticket.triaged ─► queue helpdesk.triage.results
+                                                                                     │
+                     helpdesk-api listener ◄─────────────────────────────────────────┘
+                     applies it via the same AiTriageService rule (confidence >= 0.6) + AI comment
+```
+
+**Why it's built this way:**
+- **Publish after commit.** `@TransactionalEventListener(AFTER_COMMIT)` means no message is ever sent for a ticket whose transaction rolled back. If the broker is down at that moment, the ticket just stays untriaged and can still be triaged manually; the fully reliable next step would be the *transactional outbox* pattern.
+- **Durable queues + acks.** The worker acknowledges a message only after publishing its result, so if `ai-service` is down, tickets wait in the queue and are triaged when it comes back (Postman folder 4).
+- **At-least-once delivery, idempotent consumer.** A result can arrive twice, so `AutoTriageService` only applies it to a ticket nobody has triaged yet. A human who triaged the ticket in the meantime always wins.
+- **Retries and dead-letter queues.** Temporary failures (OpenAI timeout, DB hiccup) are retried with exponential backoff. Messages that can never succeed ("poison messages": broken JSON, unknown ticket) are moved to `*.dlq` queues for inspection instead of blocking the queue or being retried forever (Postman folder 3).
+- **Same contract, two transports.** The queued messages carry the same JSON as the stage 2 REST call, so the HTTP and queue paths share all triage code on both sides.
+- **Optional by design.** Messaging is off in the default profile, so running from your IDE and running the tests need no broker.
+
+Postman: `helpdesk-api/postman/helpdesk-async-stage5b.postman_collection.json`.
 
 ## Running locally without Docker
 
@@ -197,7 +224,7 @@ All errors use RFC 9457 Problem Details JSON with a stable `code` field. The AI 
 ## Project layout
 
 ```
-docker-compose.yml   postgres + helpdesk-api + ai-service
+docker-compose.yml   postgres + rabbitmq + helpdesk-api + ai-service
 .env.example         optional compose overrides (shared secret, DB credentials, port)
 
 helpdesk-api/
@@ -215,10 +242,11 @@ helpdesk-api/src/main/java/com/helpdesk
 ├── exception/    error types + global Problem Details handler
 ├── config/       demo data seeder
 └── ai/           stage 2 triage + stage 3 drafting: clients, properties, services, controllers
+    └── autotriage/   stage 5b: RabbitMQ topology, after-commit publisher, result listener, idempotent apply
 
 ai-service/
 ├── Dockerfile
-├── app/          FastAPI app, schemas, settings, triage/ (classifier), agent/ (tool-using agent)
+├── app/          FastAPI app, schemas, settings, triage/ (classifier), agent/ (tool-using agent), worker/ (RabbitMQ consumer)
 ├── knowledge/    support policies the agent looks up
 ├── tests/        pytest (no network)
 ├── evals/        labelled tickets for measuring triage quality
@@ -232,6 +260,6 @@ ai-service/
 - [x] **Stage 3**: agent with tools. The Python agent calls read-only, customer-scoped Java endpoints (orders, ticket history) and a policy library, then drafts a reply stored as an internal `AI` comment for human approval
 - [ ] **Stage 4**: RAG over a knowledge base of FAQ and policy docs
 - [x] **Stage 5a**: Docker Compose (Postgres + both services), Flyway migrations, healthchecks, secrets via env
-- [ ] **Stage 5b**: async auto-triage of new tickets through a message queue
+- [x] **Stage 5b**: async auto-triage over RabbitMQ: publish after commit, idempotent consumer, retries with backoff, dead-letter queues
 - [ ] **Stage 5c**: human approval of AI-suggested actions (refunds, replacements), executed by Java; Python -> Java service auth
 - [ ] **Stage 6**: simple UI

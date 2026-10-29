@@ -7,4 +7,5 @@ public final class AiServiceConstants {
     public static final String DEFAULT_CONNECT_TIMEOUT ="2s";
     public static final String DEFAULT_READ_TIMEOUT = "30s";
     public static final String DEFAULT_MIN_CONFIDENCE = "0.6";
+
 }

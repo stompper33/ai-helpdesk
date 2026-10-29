@@ -15,8 +15,17 @@ spring:
   h2:
     console:
       enabled: false
+  rabbitmq:
+    host: ${RABBITMQ_HOST:rabbitmq}
+
+helpdesk:
+  auto-triage:
+    enabled: true
 
 management:
+  health:
+    rabbit:
+      enabled: true
   endpoint:
     health:
       probes:

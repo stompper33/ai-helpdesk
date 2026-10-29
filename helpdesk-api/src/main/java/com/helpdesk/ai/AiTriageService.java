@@ -27,11 +27,14 @@ import java.util.Locale;
  *
  * Every suggestion is also stored as an internal AI comment, so there is an audit trail
  * of what the AI proposed and why, even when it was not applied.
+ *
+ * Step 3 is public ({@link #recordSuggestion}) so the asynchronous path (stage 5b, results
+ * arriving over RabbitMQ) applies exactly the same confidence rule and audit comment.
  */
 @Service
 public class AiTriageService {
 
-    static final String AI_AUTHOR = "AI triage assistant";
+    public static final String AI_AUTHOR = "AI triage assistant";
 
     private final TicketRepository ticketRepository;
     private final AiTriageClient aiClient;
@@ -68,21 +71,32 @@ public class AiTriageService {
 
         // 3. record and (if confident enough) apply
         return writeTx.execute(status -> {
-            Ticket ticket = load(ticketId);
-            requireNotClosed(ticket); // it may have been closed while the AI was thinking
+            Ticket t = load(ticketId);
+            requireNotClosed(t); // it may have been closed while the AI was thinking
             Instant now = clock.instant();
-            boolean confident = result.confidence() >= props.minConfidence();
-            if (confident) {
-                ticket.triage(result.category(), result.priority(), now);
-            }
-            ticket.addComment(AuthorType.AI, AI_AUTHOR, describe(result, confident), true, now);
+            Outcome outcome = recordSuggestion(t, result, now, "AI triage");
             ticketRepository.flush();
-            return new AiTriageResponse(ticketId, confident ? Outcome.APPLIED : Outcome.LOW_CONFIDENCE, result,
-                    TicketDetailResponse.from(ticket, now));
+            return new AiTriageResponse(ticketId, outcome, result, TicketDetailResponse.from(t, now));
         });
     }
 
-    private AiTriageRequest toRequest(Ticket t) {
+    /**
+     * Applies the suggestion if confidence is high enough, and always adds the internal AI
+     * comment. Must be called inside a transaction with a loaded, non-closed ticket.
+     *
+     * @param label first words of the comment, e.g. "AI triage" or "AI auto-triage"
+     */
+    public Outcome recordSuggestion(Ticket t, AiTriageResult result, Instant now, String label) {
+        boolean confident = result.confidence() >= props.minConfidence();
+        if (confident) {
+            t.triage(result.category(), result.priority(), now);
+        }
+        t.addComment(AuthorType.AI, AI_AUTHOR, describe(result, confident, label), true, now);
+        return confident ? Outcome.APPLIED : Outcome.LOW_CONFIDENCE;
+    }
+
+    /** What ai-service needs to know about a ticket. Shared with the async publisher. */
+    public static AiTriageRequest toRequest(Ticket t) {
         CustomerOrder o = t.getRelatedOrder();
         OrderContext order = o == null ? null
                 : new OrderContext(o.getOrderNumber(), o.getProductName(), o.getStatus(), o.getAmount());
@@ -90,11 +104,11 @@ public class AiTriageService {
                 t.getPriority(), order);
     }
 
-    private String describe(AiTriageResult r, boolean applied) {
+    private String describe(AiTriageResult r, boolean applied, String label) {
         String header = applied
-                ? "AI triage applied"
-                : String.format(Locale.ROOT, "AI triage suggestion NOT applied (confidence below %.2f, needs human review)",
-                props.minConfidence());
+                ? label + " applied"
+                : String.format(Locale.ROOT, "%s suggestion NOT applied (confidence below %.2f, needs human review)",
+                label, props.minConfidence());
         return String.format(Locale.ROOT,
                 "%s: category %s, priority %s, sentiment %s, confidence %.2f.%nSummary: %s%nReasoning: %s%n(%s via %s, %d ms)",
                 header, r.category(), r.priority(), r.sentiment(), r.confidence(), r.summary(), r.reasoning(),

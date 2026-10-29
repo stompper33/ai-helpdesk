@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from app.config import Settings, get_settings
 from app.schemas import HealthResponse, TriageRequest, TriageResponse
 from app.triage.classifiers import ClassifierError, OpenAIClassifier, RuleBasedClassifier, TicketClassifier
 from app.triage.service import TriageService
+from app.worker.consumer import TriageWorker
 
 
 def _require_key(settings: Settings) -> str:
@@ -67,13 +69,25 @@ def create_app(settings: Settings | None = None, classifier: TicketClassifier | 
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        worker_task = None
+        if settings.auto_triage_worker_enabled:
+            worker = TriageWorker(settings.rabbitmq_url, triage_service,
+                                  prefetch=settings.worker_prefetch, max_attempts=settings.worker_max_attempts)
+            worker_task = asyncio.create_task(worker.run_forever(), name="triage-worker")
+            log.info("auto-triage worker enabled")
         yield
+        if worker_task is not None:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
         if helpdesk_api is not None:
             await helpdesk_api.aclose()
 
     app = FastAPI(
         title="Helpdesk AI Service",
-        version="0.3.0",
+        version="0.4.0",
         description="AI triage and reply drafting for helpdesk-api. Called by Spring Boot; returns schema-validated JSON.",
         lifespan=lifespan,
     )

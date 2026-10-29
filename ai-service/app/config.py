@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     agent_max_steps: int = 8
     agent_timeout_seconds: float = 30.0  # per model call
 
+    # Stage 5b: consume ticket.created from RabbitMQ and publish ticket.triaged.
+    # Off by default (no broker needed locally); docker-compose turns it on.
+    auto_triage_worker_enabled: bool = False
+    rabbitmq_url: str = "amqp://helpdesk:helpdesk@localhost:5672/"
+    worker_prefetch: int = 4
+    worker_max_attempts: int = 3    
+
     log_level: str = "INFO"
 
     def resolved_provider(self) -> Literal["openai", "rules"]:

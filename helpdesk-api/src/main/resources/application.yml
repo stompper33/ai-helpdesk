@@ -19,6 +19,24 @@ spring:
   # H2 uses Hibernate's create-drop above; Flyway migrations run only in the docker profile
   flyway:
     enabled: false
+  # Stage 5b: RabbitMQ. Only used when helpdesk.auto-triage.enabled=true (docker profile).
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:helpdesk}
+    password: ${RABBITMQ_PASSWORD:helpdesk}
+    connection-timeout: 5s
+    listener:
+      simple:
+        prefetch: 10
+        # failed messages are not put back on the queue forever...
+        default-requeue-rejected: false
+        retry:
+          # ...they are retried 3 times with backoff, then dead-lettered to the .dlq queue
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1s
+          multiplier: 2
 
 server:
   port: 8080
@@ -28,6 +46,10 @@ management:
     web:
       exposure:
         include: health,info
+  health:
+    # no broker when running locally; the docker profile turns this check back on
+    rabbit:
+      enabled: false
 
 springdoc:
   swagger-ui:
@@ -36,6 +58,10 @@ springdoc:
 helpdesk:
   # Loads demo customers, orders, agents and tickets on startup
   seed-demo-data: true
+  # Stage 5b: publish ticket.created to RabbitMQ and apply results from ai-service.
+  # Off by default (no broker needed for local runs and tests); on in the docker profile.
+  auto-triage:
+    enabled: false
 
 # Stage 2: the Python ai-service (see ai-service/README.md)
 ai-service:

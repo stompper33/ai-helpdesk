@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -36,6 +37,7 @@ public class TicketService {
     private final OrderRepository orderRepository;
     private final SupportAgentRepository agentRepository;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     @Transactional
     public TicketDetailResponse create(CreateTicketRequest req) {
@@ -47,8 +49,11 @@ public class TicketService {
                     .orElseThrow(() -> new NotFoundException("Order", req.orderNumber()));
         }
         TicketPriority priority = req.priority() != null ? req.priority() : TicketPriority.MEDIUM;
-        Ticket ticket = new Ticket(customer, order, req.subject(), req.description(), priority, now());
-        return TicketDetailResponse.from(ticketRepository.save(ticket), now());
+        //Ticket ticket = new Ticket(customer, order, req.subject(), req.description(), priority, now());
+        //return TicketDetailResponse.from(ticketRepository.save(ticket), now());
+        Ticket saved = ticketRepository.save(new Ticket(customer, order, req.subject(), req.description(), priority, now()));
+        events.publishEvent(new TicketCreatedEvent(saved.getId()));
+        return TicketDetailResponse.from(saved, now());
     }
 
     public PageResponse<TicketSummaryResponse> search(TicketSearchCriteria criteria, Pageable pageable) {

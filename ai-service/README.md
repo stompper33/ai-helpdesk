@@ -95,6 +95,10 @@ The eval runs 14 labelled tickets (`evals/triage_cases.json`) and reports catego
 | `AGENT_MODEL` | `OPENAI_MODEL` | Model for the agent, if you want a different one |
 | `AGENT_MAX_STEPS` | `8` | Model turns before the run is stopped |
 | `AGENT_TIMEOUT_SECONDS` | `30` | Per model call |
+| `AUTO_TRIAGE_WORKER_ENABLED` | `false` | Stage 5b: run the RabbitMQ worker inside the app (on in Docker) |
+| `RABBITMQ_URL` | `amqp://helpdesk:helpdesk@localhost:5672/` | Broker connection |
+| `WORKER_PREFETCH` | `4` | Messages processed concurrently |
+| `WORKER_MAX_ATTEMPTS` | `3` | Tries per message before it goes to the dead-letter queue |
 | `LOG_LEVEL` | `INFO` | Each triage and agent step logs provider, model, result, latency and token usage |
 
 ## How it works
@@ -112,6 +116,8 @@ The eval runs 14 labelled tickets (`evals/triage_cases.json`) and reports catego
 | `app/agent/models.py` | `AgentModel` interface: OpenAI Responses API, or an offline scripted model |
 | `app/agent/helpdesk_client.py` | HTTP client for calling back into Spring Boot (`RestClient` equivalent) |
 | `app/agent/policies.py` + `knowledge/policies.md` | Support policies the agent must quote instead of inventing |
+| `app/worker/handler.py` | Stage 5b: what to do with one queued message (ack / retry / dead-letter). Pure logic, unit-tested |
+| `app/worker/consumer.py` | Stage 5b: aio-pika consumer started in the FastAPI lifespan (`@RabbitListener` equivalent) |
 
 Design points worth mentioning:
 

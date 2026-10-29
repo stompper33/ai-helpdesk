@@ -40,6 +40,12 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Stage 5b: RabbitMQ messaging (only connects when helpdesk.auto-triage.enabled=true) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
         <!-- Swagger UI + OpenAPI spec. The Python agent can later read /v3/api-docs to discover its tools. -->
         <dependency>
             <groupId>org.springdoc</groupId>
