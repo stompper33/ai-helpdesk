@@ -3,18 +3,16 @@ package com.helpdesk.ai;
 import com.helpdesk.ai.AiDtos.AiTriageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/tickets")
 @Tag(name = "AI triage")
+@RequiredArgsConstructor
 public class AiTriageController {
 
     private final AiTriageService aiTriageService;
-
-    public AiTriageController(AiTriageService aiTriageService) {
-        this.aiTriageService = aiTriageService;
-    }
 
     @PostMapping("/{id}/ai-triage")
     @Operation(summary = "Ask the Python ai-service to triage this ticket",

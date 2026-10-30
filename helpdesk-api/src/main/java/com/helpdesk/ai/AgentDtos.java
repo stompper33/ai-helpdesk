@@ -1,5 +1,6 @@
 package com.helpdesk.ai;
 
+import com.helpdesk.actions.ProposedActionDtos.ProposedActionResponse;
 import com.helpdesk.ai.AiDtos.Usage;
 import com.helpdesk.web.dto.Responses.TicketDetailResponse;
 
@@ -25,7 +26,8 @@ public final class AgentDtos {
     public record ToolCallTrace(String name, Map<String, Object> arguments, boolean ok, long durationMs) {
     }
 
-    /** Returned by POST /api/tickets/{id}/ai-draft. */
-    public record AiDraftResponse(Long ticketId, AgentDraftResult draft, TicketDetailResponse ticket) {
+    /** Returned by POST /api/tickets/{id}/ai-draft. proposedActions = the PENDING proposals created (stage 5c). */
+    public record AiDraftResponse(Long ticketId, AgentDraftResult draft, List<ProposedActionResponse> proposedActions,
+                                  TicketDetailResponse ticket) {
     }
 }

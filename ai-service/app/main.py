@@ -59,7 +59,8 @@ def create_app(settings: Settings | None = None, classifier: TicketClassifier | 
 
     helpdesk_api = None
     if agent is None:
-        helpdesk_api = HttpHelpdeskApi(settings.helpdesk_api_url, settings.helpdesk_api_timeout_seconds)
+        helpdesk_api = HttpHelpdeskApi(settings.helpdesk_api_url, settings.helpdesk_api_timeout_seconds,
+                                       api_key=settings.helpdesk_api_key.get_secret_value())
         agent = DraftAgent(build_agent_model(settings), helpdesk_api, PolicyLibrary.from_markdown(),
                            max_steps=settings.agent_max_steps)
 

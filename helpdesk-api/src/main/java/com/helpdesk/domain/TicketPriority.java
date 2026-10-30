@@ -1,7 +1,12 @@
 package com.helpdesk.domain;
 
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.RequiredArgsConstructor;
+
 import java.time.Duration;
 
+@Getter
 public enum TicketPriority {
     LOW(Duration.ofHours(72)),
     MEDIUM(Duration.ofHours(24)),
@@ -12,9 +17,5 @@ public enum TicketPriority {
 
     TicketPriority(Duration baseResponseTime) {
         this.baseResponseTime = baseResponseTime;
-    }
-
-    public Duration baseResponseTime() {
-        return baseResponseTime;
     }
 }

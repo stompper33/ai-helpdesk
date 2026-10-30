@@ -15,9 +15,12 @@ POLICIES = PolicyLibrary.from_markdown()
 
 
 class FakeHelpdeskApi:
-    """Mimics the JSON shapes helpdesk-api returns."""
+    """Mimics helpdesk-api's internal agent API: same JSON shapes, and the same server-side
+    scoping (a ticket only sees its own customer's orders). scoping=False simulates a buggy
+    server, to prove the Python-side checks still protect the data."""
 
-    def __init__(self):
+    def __init__(self, scoping=True):
+        self.scoping = scoping
         self.calls: list[str] = []
         self.tickets = {
             1: {
@@ -46,20 +49,25 @@ class FakeHelpdeskApi:
             raise HelpdeskApiError(404, "not found")
         return self.tickets[ticket_id]
 
-    async def get_customer_orders(self, customer_id):
-        self.calls.append(f"orders:{customer_id}")
-        return [o for o in self.orders.values() if o["customerId"] == customer_id]
+    def _customer_of(self, ticket_id):
+        return self.tickets[ticket_id]["customer"]["id"]
 
-    async def get_order(self, order_number):
-        self.calls.append(f"order:{order_number}")
-        if order_number not in self.orders:
+    async def get_orders(self, ticket_id):
+        self.calls.append(f"orders:{ticket_id}")
+        cid = self._customer_of(ticket_id)
+        return [o for o in self.orders.values() if o["customerId"] == cid or not self.scoping]
+
+    async def get_order(self, ticket_id, order_number):
+        self.calls.append(f"order:{ticket_id}:{order_number}")
+        order = self.orders.get(order_number)
+        if order is None or (self.scoping and order["customerId"] != self._customer_of(ticket_id)):
             raise HelpdeskApiError(404, "not found")
-        return self.orders[order_number]
+        return order
 
-    async def get_customer_tickets(self, customer_id):
-        self.calls.append(f"tickets:{customer_id}")
-        return [{"id": 1, "subject": "this one"}, {"id": 9, "subject": "Earlier issue", "status": "CLOSED",
-                                                    "category": "SHIPPING", "createdAt": "2026-09-01"}]
+    async def get_ticket_history(self, ticket_id):
+        self.calls.append(f"history:{ticket_id}")
+        return [{"id": 9, "subject": "Earlier issue", "status": "CLOSED", "category": "SHIPPING",
+                 "createdAt": "2026-09-01"}]
 
 
 class FakeModel:
@@ -103,7 +111,7 @@ def test_scripted_agent_runs_tools_against_helpdesk_api():
     assert [t.name for t in result.tool_calls] == [
         "get_customer_orders", "get_ticket_history", "get_support_policy", "submit_reply"]
     assert all(t.ok for t in result.tool_calls)
-    assert api.calls == ["ticket:1", "orders:2", "tickets:2"]
+    assert api.calls == ["ticket:1", "orders:1", "history:1"]  # always scoped by ticket, never by customer id
     assert result.customer_reply.startswith("Hi Bob,")
     assert "30 days" in result.customer_reply  # quoted from the returns policy
     assert result.suggested_actions[0].value == "REPLACEMENT"
@@ -118,15 +126,26 @@ def test_context_excludes_system_and_ai_comments_and_email():
     assert "<ticket_data>" in msg
 
 
-def test_other_customers_order_is_hidden():
+def test_other_customers_order_is_hidden_by_the_server():
     model = FakeModel([
         ModelTurn([ToolCall("a", "get_order", {"order_number": "ORD-10001"})]),  # belongs to customer 1
         ModelTurn([submit()]),
     ])
     result = run(DraftAgent(model, FakeHelpdeskApi(), POLICIES))
-    tool_result = model.received[1][0].output
-    assert tool_result == {"error": "Order ORD-10001 not found for this customer"}
+    assert model.received[1][0].output == {"error": "Order ORD-10001 not found"}
     assert result.tool_calls[0].ok is False
+
+
+def test_python_checks_still_protect_data_if_the_server_forgot_to_scope():
+    model = FakeModel([
+        ModelTurn([ToolCall("a", "get_order", {"order_number": "ORD-10001"}),
+                   ToolCall("b", "get_customer_orders", {})]),
+        ModelTurn([submit()]),
+    ])
+    run(DraftAgent(model, FakeHelpdeskApi(scoping=False), POLICIES))
+    single, listing = (r.output for r in model.received[1])
+    assert single == {"error": "Order ORD-10001 not found for this customer"}
+    assert [o["orderNumber"] for o in listing] == ["ORD-10003"]  # Alice's ORD-10001 filtered out
 
 
 def test_tool_errors_are_returned_to_the_model_not_raised():

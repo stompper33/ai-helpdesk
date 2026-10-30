@@ -34,7 +34,11 @@ class Settings(BaseSettings):
     auto_triage_worker_enabled: bool = False
     rabbitmq_url: str = "amqp://helpdesk:helpdesk@localhost:5672/"
     worker_prefetch: int = 4
-    worker_max_attempts: int = 3    
+    worker_max_attempts: int = 3
+      
+    # Stage 5c: key for helpdesk-api's internal agent API. Same default as Java's
+    # helpdesk.internal-api.key so local runs work; docker-compose sets both.
+    helpdesk_api_key: SecretStr = SecretStr("local-dev-secret") 
 
     log_level: str = "INFO"
 

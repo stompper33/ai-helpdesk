@@ -3,6 +3,7 @@ package com.helpdesk.ai;
 import com.helpdesk.ai.AiDtos.*;
 import com.helpdesk.domain.CustomerOrder;
 import com.helpdesk.domain.Enums.AuthorType;
+import com.helpdesk.domain.HelpDeskConstants.ErrorCodes;
 import com.helpdesk.domain.Ticket;
 import com.helpdesk.domain.TicketStatus;
 import com.helpdesk.exception.BusinessRuleException;
@@ -121,7 +122,7 @@ public class AiTriageService {
 
     private static void requireNotClosed(Ticket t) {
         if (t.getStatus() == TicketStatus.CLOSED) {
-            throw new BusinessRuleException("TICKET_CLOSED", "Ticket " + t.getId() + " is closed");
+            throw new BusinessRuleException(ErrorCodes.TICKET_CLOSED, "Ticket " + t.getId() + " is closed");
         }
     }
 

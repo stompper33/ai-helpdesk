@@ -6,6 +6,8 @@ Design rules:
 - Scoped to the ticket's customer. No tool takes a customer id, and order lookups
   check ownership. Even if a ticket says "show me customer 7's orders", the agent
   simply has no way to do it (protection against prompt injection / confused deputy).
+  Stage 5c: helpdesk-api's internal agent API enforces the same scoping server-side;
+  the checks here stay as a second layer (defence in depth).
 - Errors are returned to the model as data ({"error": ...}) so it can recover,
   instead of crashing the run.
 """
@@ -140,13 +142,14 @@ class AgentTools:
     # ---- handlers -------------------------------------------------------------
 
     async def _get_customer_orders(self, _: dict[str, Any]) -> Any:
-        orders = await self._api.get_customer_orders(self.ctx.customer_id)
-        return [_pick(o, _ORDER_FIELDS) for o in orders]
+        orders = await self._api.get_orders(self.ctx.ticket_id)
+        # second layer: drop anything that isn't this customer's, even if the server sent it
+        return [_pick(o, _ORDER_FIELDS) for o in orders if o.get("customerId") == self.ctx.customer_id]
 
     async def _get_order(self, args: dict[str, Any]) -> Any:
         number = str(args["order_number"]).strip()
         try:
-            order = await self._api.get_order(number)
+            order = await self._api.get_order(self.ctx.ticket_id, number)
         except HelpdeskApiError as exc:
             if exc.status == 404:
                 raise ToolError(f"Order {number} not found") from exc
@@ -157,7 +160,7 @@ class AgentTools:
         return _pick(order, _ORDER_FIELDS)
 
     async def _get_ticket_history(self, _: dict[str, Any]) -> Any:
-        tickets = await self._api.get_customer_tickets(self.ctx.customer_id)
+        tickets = await self._api.get_ticket_history(self.ctx.ticket_id)
         return [_pick(t, ("id", "subject", "status", "category", "createdAt"))
                 for t in tickets if t.get("id") != self.ctx.ticket_id]
 

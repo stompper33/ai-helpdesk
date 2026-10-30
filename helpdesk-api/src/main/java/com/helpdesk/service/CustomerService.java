@@ -2,6 +2,7 @@ package com.helpdesk.service;
 
 import com.helpdesk.domain.Customer;
 import com.helpdesk.domain.Enums.CustomerTier;
+import com.helpdesk.domain.HelpDeskConstants.ErrorCodes;
 import com.helpdesk.exception.BusinessRuleException;
 import com.helpdesk.exception.NotFoundException;
 import com.helpdesk.repository.CustomerRepository;
@@ -41,7 +42,7 @@ public class CustomerService {
     @Transactional
     public CustomerResponse createCustomer(CreateCustomerRequest req) {
         if (customerRepository.existsByEmailIgnoreCase(req.email())) {
-            throw new BusinessRuleException("EMAIL_TAKEN", "A customer with email " + req.email() + " already exists");
+            throw new BusinessRuleException(ErrorCodes.EMAIL_TAKEN, "A customer with email " + req.email() + " already exists");
         }
         CustomerTier tier = req.tier() != null ? req.tier() : CustomerTier.STANDARD;
         Customer saved = customerRepository.save(new Customer(req.name(), req.email(), tier, clock.instant()));

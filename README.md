@@ -83,6 +83,42 @@ POST /api/tickets ─► helpdesk-api commits the ticket
 
 Postman: `helpdesk-api/postman/helpdesk-async-stage5b.postman_collection.json`.
 
+## Stage 5c: human approval of AI actions + service-to-service auth
+
+### The AI proposes, a human decides, Java executes
+
+When the agent drafts a reply, its `suggestedActions` become **proposed actions** (table `proposed_actions`, Flyway `V2`) in status `PENDING`. Nothing happens until a support agent decides:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/actions?status=PENDING` | the approval queue, oldest first |
+| `GET /api/tickets/{id}/actions` | proposals and decisions for one ticket |
+| `POST /api/actions/{id}/approve` `{"agentId": 2, "note": "..."}` | executes the action through the domain |
+| `POST /api/actions/{id}/reject` `{"agentId": 2, "note": "..."}` | records the decision, executes nothing |
+
+| Action | What approval does |
+|---|---|
+| `REFUND` | order → `REFUNDED` (not allowed for unpaid `PLACED` orders, or twice) |
+| `REPLACEMENT` | creates replacement order `ORD-xxxxx-R1` (only for `DELIVERED` orders) |
+| `ESCALATE` | raises ticket priority one level |
+| `REQUEST_MORE_INFO` | assigns an unassigned ticket to the approver, then ticket → `WAITING_ON_CUSTOMER` (lifecycle rules still apply, e.g. a RESOLVED ticket returns 409) |
+
+- **Execution and decision are one transaction.** If a business rule blocks execution (say the order can't be refunded), everything rolls back, the action stays `PENDING`, and the API returns a 409 explaining why.
+- **No double execution.** A decided action can't be decided again (`ACTION_ALREADY_DECIDED`), and `@Version` optimistic locking turns two simultaneous approvals into one success and one `409 CONCURRENT_UPDATE`.
+- **Audit trail:** who decided, when, their note, the execution result, and a system comment on the ticket.
+
+### The agent's own API
+
+The agent's tools no longer call the public `/api`. They call **`/internal/agent/tickets/{ticketId}/...`**, which is:
+
+- **authenticated** with a service key (`X-Api-Key`, from `SERVICE_API_KEY`), so the public API stays open for Postman and a future UI
+- **read-only**: only GET endpoints exist
+- **scoped on the server**: every path is tied to one ticket, and Java only returns that ticket's customer's data
+
+The Python tools keep their own ownership checks, so a bug on either side alone can't leak another customer's data (defence in depth). There's a test that simulates a server that forgot to scope.
+
+Postman: `helpdesk-api/postman/helpdesk-approvals-stage5c.postman_collection.json`.
+
 ## Running locally without Docker
 
 Use two terminals:
@@ -122,9 +158,9 @@ If ai-service is down, the endpoint returns `503 AI_SERVICE_UNAVAILABLE` and the
 ```
 Postman ─► Java: POST /api/tickets/1/ai-draft
             └─► Python: POST /v1/agent/draft-reply {ticketId: 1}
-                 ├─► Java: GET /api/tickets/1                 (load context)
+                 ├─► Java: GET /internal/agent/tickets/1                (load context)
                  ├─► OpenAI: "what do you need?"  ─► get_customer_orders, get_support_policy(returns)
-                 ├─► Java: GET /api/customers/2/orders        (tool)
+                 ├─► Java: GET /internal/agent/tickets/1/orders         (tool)
                  ├─► OpenAI: tool results          ─► submit_reply(...)
                  └─◄ draft + tool trace
             Java stores the draft as an internal AI comment ─► a human edits and sends it
@@ -232,7 +268,7 @@ helpdesk-api/
 └── src/main/resources/
     ├── application.yml                 default profile: H2 in memory (local runs, tests)
     ├── application-docker.yml          docker profile: PostgreSQL + Flyway
-    └── db/migration/V1__init_schema.sql
+    └── db/migration/   V1__init_schema.sql, V2__proposed_actions.sql
 
 helpdesk-api/src/main/java/com/helpdesk
 ├── domain/       entities + business rules (Ticket is the core aggregate)
@@ -243,6 +279,8 @@ helpdesk-api/src/main/java/com/helpdesk
 ├── config/       demo data seeder
 └── ai/           stage 2 triage + stage 3 drafting: clients, properties, services, controllers
     └── autotriage/   stage 5b: RabbitMQ topology, after-commit publisher, result listener, idempotent apply
+├── actions/      stage 5c: approval queue for AI-proposed actions (approve / reject / execute)
+└── internal/     stage 5c: the agent's authenticated, ticket-scoped internal API + service key filter
 
 ai-service/
 ├── Dockerfile
@@ -261,5 +299,5 @@ ai-service/
 - [ ] **Stage 4**: RAG over a knowledge base of FAQ and policy docs
 - [x] **Stage 5a**: Docker Compose (Postgres + both services), Flyway migrations, healthchecks, secrets via env
 - [x] **Stage 5b**: async auto-triage over RabbitMQ: publish after commit, idempotent consumer, retries with backoff, dead-letter queues
-- [ ] **Stage 5c**: human approval of AI-suggested actions (refunds, replacements), executed by Java; Python -> Java service auth
+- [x] **Stage 5c**: approval queue for AI-proposed actions (executed by Java, optimistic locking, audit), authenticated + server-scoped internal API for the agent
 - [ ] **Stage 6**: simple UI

@@ -1,5 +1,7 @@
 package com.helpdesk.ai;
 
+import com.helpdesk.ai.AiServiceConstants.Headers;
+
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,7 +21,7 @@ public class AiClientConfig {
 
         builder = builder.baseUrl(props.baseUrl()).requestFactory(requestFactory);
         if (props.apiKey() != null && !props.apiKey().isBlank()) {
-            builder = builder.defaultHeader("X-Api-Key", props.apiKey());
+            builder = builder.defaultHeader(Headers.API_KEY_HEADER, props.apiKey());
         }
         return builder.build();
     }

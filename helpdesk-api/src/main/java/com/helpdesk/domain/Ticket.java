@@ -2,6 +2,7 @@ package com.helpdesk.domain;
 
 import com.helpdesk.domain.Enums.AuthorType;
 import com.helpdesk.domain.Enums.CustomerTier;
+import com.helpdesk.domain.HelpDeskConstants.ErrorCodes;
 import com.helpdesk.domain.Enums.TicketCategory;
 import com.helpdesk.exception.BusinessRuleException;
 import jakarta.persistence.*;
@@ -76,7 +77,7 @@ public class Ticket {
     public Ticket(Customer customer, CustomerOrder order, String subject, String description,
                   TicketPriority priority, Instant now) {
         if (order != null && !order.getCustomer().getId().equals(customer.getId())) {
-            throw new BusinessRuleException("ORDER_CUSTOMER_MISMATCH",
+            throw new BusinessRuleException(ErrorCodes.ORDER_CUSTOMER_MISMATCH,
                     "Order " + order.getOrderNumber() + " does not belong to customer " + customer.getId());
         }
         this.customer = customer;
@@ -118,17 +119,17 @@ public class Ticket {
 
     public void transitionTo(TicketStatus next, String note, Instant now) {
         if (next == status) {
-            throw new BusinessRuleException("NO_OP_TRANSITION", "Ticket is already " + status);
+            throw new BusinessRuleException(ErrorCodes.NO_OP_TRANSITION, "Ticket is already " + status);
         }
         if (!status.canTransitionTo(next)) {
-            throw new BusinessRuleException("INVALID_STATUS_TRANSITION",
+            throw new BusinessRuleException(ErrorCodes.INVALID_STATUS_TRANSITION,
                     "Cannot move ticket from " + status + " to " + next + ". Allowed: " + status.allowedNext());
         }
         if (next == TicketStatus.IN_PROGRESS && assignee == null) {
-            throw new BusinessRuleException("ASSIGNEE_REQUIRED", "Assign the ticket before starting work on it");
+            throw new BusinessRuleException(ErrorCodes.ASSIGNEE_REQUIRED, "Assign the ticket before starting work on it");
         }
         if (next == TicketStatus.RESOLVED && category == null) {
-            throw new BusinessRuleException("CATEGORY_REQUIRED", "Set a category (triage) before resolving");
+            throw new BusinessRuleException(ErrorCodes.CATEGORY_REQUIRED, "Set a category (triage) before resolving");
         }
         // Record the note first: once the ticket is CLOSED it no longer accepts comments.
         if (note != null && !note.isBlank()) {
@@ -142,7 +143,7 @@ public class Ticket {
                                     boolean internal, Instant now) {
         requireNotClosed();
         if (authorType == AuthorType.CUSTOMER && internal) {
-            throw new BusinessRuleException("CUSTOMER_INTERNAL_NOTE", "Customers cannot write internal notes");
+            throw new BusinessRuleException(ErrorCodes.CUSTOMER_INTERNAL_NOTE, "Customers cannot write internal notes");
         }
         TicketComment comment = new TicketComment(this, authorType, authorName, body, internal, now);
         comments.add(comment);
@@ -170,7 +171,7 @@ public class Ticket {
 
     /** Premium customers get half the response time. */
     private Instant calculateSlaDue(Instant from) {
-        Duration window = priority.baseResponseTime();
+        Duration window = priority.getBaseResponseTime();
         if (customer.getTier() == CustomerTier.PREMIUM) {
             window = window.dividedBy(2);
         }
@@ -179,7 +180,7 @@ public class Ticket {
 
     private void requireNotClosed() {
         if (status == TicketStatus.CLOSED) {
-            throw new BusinessRuleException("TICKET_CLOSED", "Ticket " + id + " is closed");
+            throw new BusinessRuleException(ErrorCodes.TICKET_CLOSED, "Ticket " + id + " is closed");
         }
     }
 

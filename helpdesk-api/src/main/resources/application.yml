@@ -62,6 +62,8 @@ helpdesk:
   # Off by default (no broker needed for local runs and tests); on in the docker profile.
   auto-triage:
     enabled: false
+  internal-api:
+    key: ${INTERNAL_API_KEY:local-dev-secret}
 
 # Stage 2: the Python ai-service (see ai-service/README.md)
 ai-service:

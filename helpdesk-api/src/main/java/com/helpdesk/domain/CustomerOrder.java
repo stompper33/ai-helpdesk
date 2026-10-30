@@ -1,9 +1,11 @@
 package com.helpdesk.domain;
 
 import com.helpdesk.domain.Enums.OrderStatus;
+import com.helpdesk.exception.BusinessRuleException;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import com.helpdesk.domain.HelpDeskConstants.ErrorCodes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -52,5 +54,16 @@ public class CustomerOrder {
         this.status = status;
         this.trackingNumber = trackingNumber;
         this.orderedAt = orderedAt;
+    }
+
+    public void markRefunded() {
+        if (status == OrderStatus.REFUNDED) {
+            throw new BusinessRuleException(ErrorCodes.ORDER_ALREADY_REFUNDED, "Order " + orderNumber + " was already refunded");
+        }
+        if (status == OrderStatus.PLACED) {
+            throw new BusinessRuleException(ErrorCodes.ORDER_NOT_REFUNDABLE,
+                    "Order " + orderNumber + " has not been charged yet (status PLACED); cancel it instead");
+        }
+        this.status = OrderStatus.REFUNDED;
     }
 }

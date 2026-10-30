@@ -62,6 +62,8 @@ services:
       # Containers reach each other by service name, not localhost
       AI_SERVICE_URL: http://ai-service:8000
       AI_SERVICE_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
+      # Stage 5c: key ai-service must present to call /internal/agent/** (the agent's tools)
+      INTERNAL_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
       # Stage 5b: auto-triage over RabbitMQ (enabled by the docker profile)
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-helpdesk}
@@ -88,6 +90,8 @@ services:
       # These win over values in ai-service/.env
       HELPDESK_API_URL: http://helpdesk-api:8080
       SERVICE_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
+      # Stage 5c: sent as X-Api-Key when the agent's tools call helpdesk-api's internal API
+      HELPDESK_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
       # Stage 5b: consume ticket.created, publish ticket.triaged
       AUTO_TRIAGE_WORKER_ENABLED: "true"
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-helpdesk}:${RABBITMQ_PASSWORD:-helpdesk}@rabbitmq:5672/

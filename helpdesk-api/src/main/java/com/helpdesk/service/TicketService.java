@@ -3,6 +3,7 @@ package com.helpdesk.service;
 import com.helpdesk.domain.*;
 import com.helpdesk.domain.Enums.AuthorType;
 import com.helpdesk.exception.BusinessRuleException;
+import com.helpdesk.domain.HelpDeskConstants.ErrorCodes;
 import com.helpdesk.exception.NotFoundException;
 import com.helpdesk.repository.CustomerRepository;
 import com.helpdesk.repository.OrderRepository;
@@ -49,8 +50,6 @@ public class TicketService {
                     .orElseThrow(() -> new NotFoundException("Order", req.orderNumber()));
         }
         TicketPriority priority = req.priority() != null ? req.priority() : TicketPriority.MEDIUM;
-        //Ticket ticket = new Ticket(customer, order, req.subject(), req.description(), priority, now());
-        //return TicketDetailResponse.from(ticketRepository.save(ticket), now());
         Ticket saved = ticketRepository.save(new Ticket(customer, order, req.subject(), req.description(), priority, now()));
         events.publishEvent(new TicketCreatedEvent(saved.getId()));
         return TicketDetailResponse.from(saved, now());
@@ -92,7 +91,7 @@ public class TicketService {
     @Transactional
     public CommentResponse addComment(Long id, AddCommentRequest req) {
         if (req.authorType() == AuthorType.SYSTEM) {
-            throw new BusinessRuleException("SYSTEM_AUTHOR_RESERVED", "SYSTEM comments are created by the application only");
+            throw new BusinessRuleException(ErrorCodes.SYSTEM_AUTHOR_RESERVED, "SYSTEM comments are created by the application only");
         }
         Ticket ticket = load(id);
         TicketComment comment = ticket.addComment(req.authorType(), req.authorName(), req.body(), req.internal(), now());

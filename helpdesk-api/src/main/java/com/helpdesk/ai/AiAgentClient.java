@@ -2,6 +2,8 @@ package com.helpdesk.ai;
 
 import com.helpdesk.ai.AgentDtos.AgentDraftRequest;
 import com.helpdesk.ai.AgentDtos.AgentDraftResult;
+import com.helpdesk.ai.AiServiceConstants.AiErrorCodes;
+import com.helpdesk.ai.AiServiceConstants.Headers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -32,7 +34,7 @@ public class AiAgentClient {
         requestFactory.setReadTimeout(agentProps.readTimeout());
         builder = builder.baseUrl(props.baseUrl()).requestFactory(requestFactory);
         if (props.apiKey() != null && !props.apiKey().isBlank()) {
-            builder = builder.defaultHeader("X-Api-Key", props.apiKey());
+            builder = builder.defaultHeader(Headers.API_KEY_HEADER, props.apiKey());
         }
         this.restClient = builder.build();
     }
@@ -46,7 +48,7 @@ public class AiAgentClient {
                     .retrieve()
                     .body(AgentDraftResult.class);
             if (result == null || result.customerReply() == null || result.customerReply().isBlank()) {
-                throw new AiServiceException("AI_BAD_RESPONSE", HttpStatus.BAD_GATEWAY,
+                throw new AiServiceException(AiErrorCodes.AI_BAD_RESPONSE, HttpStatus.BAD_GATEWAY,
                         "ai-service returned an empty draft", null);
             }
             log.info("AI draft ticket={} steps={} tools={} confidence={} ({} via {}, {} ms)", ticketId,
@@ -54,13 +56,13 @@ public class AiAgentClient {
                     result.confidence(), result.model(), result.provider(), result.latencyMs());
             return result;
         } catch (ResourceAccessException e) {
-            throw new AiServiceException("AI_SERVICE_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE,
+            throw new AiServiceException(AiErrorCodes.AI_SERVICE_UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE,
                     "ai-service is not reachable or timed out: " + e.getMessage(), e);
         } catch (RestClientResponseException e) {
-            throw new AiServiceException("AI_SERVICE_ERROR", HttpStatus.BAD_GATEWAY,
+            throw new AiServiceException(AiErrorCodes.AI_SERVICE_ERROR, HttpStatus.BAD_GATEWAY,
                     "ai-service returned " + e.getStatusCode().value() + ": " + e.getResponseBodyAsString(), e);
         } catch (RestClientException e) {
-            throw new AiServiceException("AI_BAD_RESPONSE", HttpStatus.BAD_GATEWAY,
+            throw new AiServiceException(AiErrorCodes.AI_BAD_RESPONSE, HttpStatus.BAD_GATEWAY,
                     "Could not read ai-service response: " + e.getMessage(), e);
         }
     }
