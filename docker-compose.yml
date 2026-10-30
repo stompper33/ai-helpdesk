@@ -112,6 +112,15 @@ services:
       retries: 10
       start_period: 10s
 
+  # Stage 6: the console UI (React + TypeScript), served by nginx. Open http://localhost:3000
+  frontend:
+    build: ./frontend
+    depends_on:
+      helpdesk-api:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
 volumes:
   pgdata:
   rabbitmqdata:

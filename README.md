@@ -6,6 +6,10 @@ The guiding rule: **Java owns the business, Python owns the intelligence.** The 
 
 **Stack:** Java 21 · Spring Boot 3.5 · JPA/Hibernate · Flyway · PostgreSQL + pgvector · RabbitMQ · Python 3.12 · FastAPI · OpenAI (structured outputs, function calling, embeddings) · Docker Compose
 
+```markdown
+A React + TypeScript console (`frontend/`) puts it all on one screen: the queue, the conversation with AI drafts and their sources, and one-click approval of the actions the AI proposes.
+```
+
 ## What happens to a ticket
 
 1. **A customer raises a ticket.** Spring Boot stores it and, after the transaction commits, publishes `ticket.created` to RabbitMQ.
@@ -18,7 +22,7 @@ The guiding rule: **Java owns the business, Python owns the intelligence.** The 
 
 ```
                                    ┌─────────────────────────────────────────┐
-  Postman / UI ──── REST /api ───► │        helpdesk-api  (Spring Boot)       │
+  React UI / Postman ─ REST /api ► │        helpdesk-api  (Spring Boot)      │
                                    │  domain rules · SLA · approvals · audit │
                                    └───┬──────────────▲──────────────┬───────┘
                  sync REST: triage,    │              │ /internal/agent/** │ JPA + Flyway
@@ -126,6 +130,9 @@ The agent receives the top 4 passages per search, so recall@3–5 is how often i
 - **Config in the environment:** images contain no environment-specific settings. Wiring values live in Compose, secrets come from git-ignored `.env` files, and in production they would come from a secret manager.
 - **Spring profiles keep local runs simple:** the default profile uses H2 with no broker; the `docker` profile switches on PostgreSQL, Flyway (`ddl-auto=validate`) and RabbitMQ.
 
+**The UI is just another API client.** 
+- The React console calls only helpdesk-api's public `/api/**`, the same endpoints as Postman, and never ai-service or `/internal/**`. It contains no business rules: which statuses a ticket can move to comes from `allowedNextStatuses`, and errors are the API's Problem Details shown as-is. The browser sees a single origin (Vite's proxy in development, nginx in Docker), so helpdesk-api needs no CORS setup.
+
 ## Quick start: everything in Docker
 
 Requirements: Docker Desktop (or Docker Engine with Compose v2.24+). You don't need Java, Maven or Python installed.
@@ -139,6 +146,7 @@ The first build takes a few minutes. After that:
 
 | Service | URL | Notes |
 |---|---|---|
+| **Console UI** | **http://localhost:3000** | React + TypeScript, served by nginx; start here |
 | helpdesk-api | http://localhost:8080/swagger-ui.html | `docker` profile: PostgreSQL + Flyway + RabbitMQ |
 | ai-service | http://localhost:8000/docs | OpenAI if `ai-service/.env` has a key, offline rules otherwise |
 | PostgreSQL | `localhost:5432`, `helpdesk`/`helpdesk` (and `knowledge`/`knowledge`) | data survives restarts (volume `pgdata`) |
@@ -177,6 +185,9 @@ uvicorn app.main:app --reload --port 8000
 
 # Terminal 2: helpdesk-api on :8080
 cd helpdesk-api && mvn spring-boot:run
+
+# Terminal 3 (optional): the UI on :5173, proxying /api to :8080 (needs Node 20.19+ or 22.12+)
+cd frontend && npm install && npm run dev
 ```
 
 Tests: `mvn test` in `helpdesk-api/`, `pytest` in `ai-service/`. Neither calls OpenAI, a database or a broker.
@@ -296,10 +307,20 @@ The decision and the execution happen in one transaction: a blocked rule rolls e
 
 The agent's internal API `/internal/agent/tickets/{ticketId}/...` requires the service key, offers only GET endpoints, and is scoped server-side to the ticket's customer.
 
+### Console UI (stage 6)
+
+| Screen | What you can do |
+|---|---|
+| Tickets | queue sorted by priority, then SLA; views for needs triage, unassigned, overdue, assigned to me |
+| Ticket | conversation, reply composer, customer and order facts, assign / change status, manual or AI triage, AI draft with sources and tool trace, proposed actions |
+| Approvals | approve or reject AI-proposed actions, with a note; decided actions show who approved and what happened |
+
+Anything the AI produced is shown on amber and marked as not sent; a draft lists the knowledge base passages it relied on next to the letter. "Acting as" in the top bar picks the support agent (no login: authentication is out of scope). Two runtime dependencies only, `react` and `react-dom`. Details in [`frontend/README.md`](frontend/README.md).
+
 ## Project layout
 
 ```
-docker-compose.yml     postgres (pgvector) + rabbitmq + helpdesk-api + ai-service
+docker-compose.yml     postgres (pgvector) + rabbitmq + helpdesk-api + ai-service + frontend
 postgres/init/         creates the "knowledge" database, its user and the vector extension (first start)
 .env.example           optional compose overrides (shared secret, credentials, port)
 
@@ -330,6 +351,15 @@ ai-service/                           Python, FastAPI
 ├── evals/                            labelled triage tickets + retrieval questions
 ├── scripts/                          eval_triage, eval_retrieval, index_knowledge
 └── tests/                            pytest; no network, no database, no broker
+
+frontend/                             React 19 + TypeScript, Vite
+├── Dockerfile                        multi-stage: Node build -> nginx
+├── nginx.conf                        serves the build, proxies /api to helpdesk-api
+└── src/
+    ├── api/                          typed client + TypeScript mirrors of the Java DTOs
+    ├── pages/                        Tickets, Ticket, Approvals
+    ├── components/                   conversation, AI draft, action approvals, new-ticket dialog
+    └── lib/                          hash router, data loading hook, formatting
 ```
 
 ## Roadmap
