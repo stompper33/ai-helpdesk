@@ -13,11 +13,12 @@ send tool results, repeat. Two implementations:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.agent.schemas import PolicyTopic, SuggestedAction
-from app.agent.tools import SUBMIT_REPLY, TicketContext, ToolSpec
+from app.agent.schemas import SuggestedAction
+from app.agent.tools import SEARCH_KNOWLEDGE_BASE, SUBMIT_REPLY, TicketContext, ToolSpec
 from app.schemas import Category, Usage
 
 
@@ -127,70 +128,64 @@ class _OpenAISession:
 
 # ---- Offline scripted model ---------------------------------------------------------
 
-_TOPIC_FOR_CATEGORY = {
-    Category.RETURNS: PolicyTopic.RETURNS,
-    Category.BILLING: PolicyTopic.REFUNDS,
-    Category.SHIPPING: PolicyTopic.SHIPPING,
-    Category.ACCOUNT: PolicyTopic.ACCOUNT_SECURITY,
-    Category.TECHNICAL: PolicyTopic.TECHNICAL_SUPPORT,
-    Category.OTHER: PolicyTopic.GENERAL,
-}
-
-_ACTION_FOR_TOPIC = {
-    PolicyTopic.RETURNS: SuggestedAction.REPLACEMENT,
-    PolicyTopic.REFUNDS: SuggestedAction.REFUND,
-    PolicyTopic.SHIPPING: SuggestedAction.REQUEST_MORE_INFO,
-    PolicyTopic.ACCOUNT_SECURITY: SuggestedAction.ESCALATE,
+_ACTION_FOR_CATEGORY = {
+    Category.RETURNS: SuggestedAction.REPLACEMENT,
+    Category.BILLING: SuggestedAction.REFUND,
+    Category.SHIPPING: SuggestedAction.REQUEST_MORE_INFO,
+    Category.ACCOUNT: SuggestedAction.ESCALATE,
 }
 
 
 class ScriptedAgentModel:
     name = "rules"
-    model = "scripted-agent-v1"
+    model = "scripted-agent-v2"
 
     def new_session(self, instructions: str, tools: list[ToolSpec], ctx: TicketContext) -> AgentSession:
         return _ScriptedSession(ctx)
 
 
 class _ScriptedSession:
+    """Calls the same tools a real model would (orders, history, one knowledge search) and fills a
+    template from the top search result, citing it. Deterministic, so tests can rely on it."""
+
     def __init__(self, ctx: TicketContext):
         self._ctx = ctx
-        self._topic = self._pick_topic(ctx)
+        self._category = self._pick_category(ctx)
 
     async def send(self, message: str) -> ModelTurn:
-        calls = [
+        query = f"{self._ctx.subject}. {self._ctx.description}"[:300]
+        return ModelTurn(tool_calls=[
             ToolCall("c1", "get_customer_orders", {}),
             ToolCall("c2", "get_ticket_history", {}),
-            ToolCall("c3", "get_support_policy", {"topic": self._topic.value}),
-        ]
-        return ModelTurn(tool_calls=calls)
+            ToolCall("c3", SEARCH_KNOWLEDGE_BASE, {"query": query}),
+        ])
 
     async def send_tool_results(self, results: list[ToolResult]) -> ModelTurn:
         outputs = {r.call_id: r.output for r in results}
-        policy = outputs.get("c3", {}).get("policy", "") if isinstance(outputs.get("c3"), dict) else ""
-        first_policy_sentence = policy.split("\n")[0].strip() if policy else ""
         orders = outputs.get("c1") if isinstance(outputs.get("c1"), list) else []
         history = outputs.get("c2") if isinstance(outputs.get("c2"), list) else []
+        search = outputs.get("c3") if isinstance(outputs.get("c3"), dict) else {}
+        hits = search.get("results") or []
+        top = hits[0] if hits else None
+        first_sentence = re.split(r"(?<=[.!?])\s+", top["text"].strip(), maxsplit=1)[0] if top else ""
 
         first_name = self._ctx.customer_name.split()[0]
         reply = (f"Hi {first_name},\n\nThanks for contacting us about \"{self._ctx.subject}\". "
-                 f"{first_policy_sentence}\n\nA member of our team will review your case and follow up "
+                 f"{first_sentence}\n\nA member of our team will review your case and follow up "
                  f"with next steps shortly.\n\nCustomer Support Team")
-        note = (f"Scripted draft (no LLM). Policy topic: {self._topic.value}. "
+        note = (f"Scripted draft (no LLM). Top knowledge match: {top['source'] if top else 'none'}. "
                 f"Customer has {len(orders)} order(s) and {len(history)} other ticket(s).")
-        action = _ACTION_FOR_TOPIC.get(self._topic, SuggestedAction.NO_ACTION)
-        submit = ToolCall("c4", SUBMIT_REPLY, {
-            "customer_reply": reply, "internal_note": note,
-            "suggested_actions": [action.value], "confidence": 0.4,
-        })
-        return ModelTurn(tool_calls=[submit])
+        action = _ACTION_FOR_CATEGORY.get(self._category, SuggestedAction.NO_ACTION)
+        return ModelTurn(tool_calls=[ToolCall("c4", SUBMIT_REPLY, {
+            "customer_reply": reply, "internal_note": note, "suggested_actions": [action.value],
+            "confidence": 0.4, "sources": [top["source"]] if top else [],
+        })])
 
     @staticmethod
-    def _pick_topic(ctx: TicketContext) -> PolicyTopic:
+    def _pick_category(ctx: TicketContext) -> Category:
         if ctx.category:
-            return _TOPIC_FOR_CATEGORY.get(Category(ctx.category), PolicyTopic.GENERAL)
+            return Category(ctx.category)
         from app.schemas import TriageRequest
         from app.triage.classifiers import RuleBasedClassifier
 
-        guess = RuleBasedClassifier().decide(TriageRequest(subject=ctx.subject, description=ctx.description))
-        return _TOPIC_FOR_CATEGORY[guess.category]
+        return RuleBasedClassifier().decide(TriageRequest(subject=ctx.subject, description=ctx.description)).category

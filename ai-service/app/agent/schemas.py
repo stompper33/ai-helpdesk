@@ -20,16 +20,6 @@ class SuggestedAction(str, Enum):
     NO_ACTION = "NO_ACTION"
 
 
-class PolicyTopic(str, Enum):
-    RETURNS = "returns"
-    REFUNDS = "refunds"
-    SHIPPING = "shipping"
-    WARRANTY = "warranty"
-    ACCOUNT_SECURITY = "account_security"
-    TECHNICAL_SUPPORT = "technical_support"
-    GENERAL = "general"
-
-
 # ---- what the model must pass to submit_reply ----------------------------------
 
 
@@ -38,6 +28,7 @@ class DraftSubmission(BaseModel):
     internal_note: str = Field(max_length=1000)
     suggested_actions: list[SuggestedAction]
     confidence: float
+    sources: list[str]  # stage 4: knowledge base chunk ids the reply relies on
 
 
 # ---- HTTP request / response ---------------------------------------------------
@@ -60,6 +51,7 @@ class DraftReplyResponse(CamelModel):
     internal_note: str
     suggested_actions: list[SuggestedAction]
     confidence: float
+    sources: list[str]  # only ids the agent actually retrieved (unverified citations are dropped)
     steps: int
     tool_calls: list[ToolCallTrace]
     provider: str

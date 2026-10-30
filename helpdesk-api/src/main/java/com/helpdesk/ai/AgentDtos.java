@@ -17,10 +17,20 @@ public final class AgentDtos {
     public record AgentDraftRequest(Long ticketId) {
     }
 
+    /** sources (stage 4) = knowledge base passages the reply relies on, verified by ai-service. */
     public record AgentDraftResult(Long ticketId, String customerReply, String internalNote,
                                    List<String> suggestedActions, double confidence, int steps,
                                    List<ToolCallTrace> toolCalls, String provider, String model,
-                                   long latencyMs, Usage usage) {
+                                   long latencyMs, Usage usage, List<String> sources) {
+
+        /** Pre-stage-4 shape (no sources), kept so existing callers and tests still compile. */
+        public AgentDraftResult(Long ticketId, String customerReply, String internalNote,
+                                List<String> suggestedActions, double confidence, int steps,
+                                List<ToolCallTrace> toolCalls, String provider, String model,
+                                long latencyMs, Usage usage) {
+            this(ticketId, customerReply, internalNote, suggestedActions, confidence, steps, toolCalls, provider,
+                    model, latencyMs, usage, List.of());
+        }
     }
 
     public record ToolCallTrace(String name, Map<String, Object> arguments, boolean ok, long durationMs) {

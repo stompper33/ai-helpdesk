@@ -16,10 +16,10 @@ from pydantic import ValidationError
 
 from app.agent.helpdesk_client import HelpdeskApi, HelpdeskApiError
 from app.agent.models import AgentError, AgentModel, ToolResult
-from app.agent.policies import PolicyLibrary
 from app.agent.prompts import AGENT_SYSTEM_PROMPT, build_context_message
 from app.agent.schemas import DraftReplyResponse, DraftSubmission, ToolCallTrace
 from app.agent.tools import SUBMIT_REPLY, AgentTools, TicketContext
+from app.knowledge.base import KnowledgeBase
 from app.schemas import Usage
 
 log = logging.getLogger("ai_service.agent")
@@ -30,16 +30,18 @@ class TicketNotFound(Exception):
 
 
 class DraftAgent:
-    def __init__(self, model: AgentModel, api: HelpdeskApi, policies: PolicyLibrary, max_steps: int = 8):
+    def __init__(self, model: AgentModel, api: HelpdeskApi, knowledge: KnowledgeBase, max_steps: int = 8,
+                 top_k: int = 4):
         self.model = model
         self.api = api
-        self.policies = policies
+        self.knowledge = knowledge
         self.max_steps = max_steps
+        self.top_k = top_k
 
     async def draft(self, ticket_id: int) -> DraftReplyResponse:
         started = time.perf_counter()
         ctx = await self._load_context(ticket_id)
-        tools = AgentTools(ctx, self.api, self.policies)
+        tools = AgentTools(ctx, self.api, self.knowledge, self.top_k)
         session = self.model.new_session(AGENT_SYSTEM_PROMPT, tools.specs(), ctx)
 
         trace: list[ToolCallTrace] = []
@@ -61,7 +63,7 @@ class DraftAgent:
                         results.append(ToolResult(call.call_id, {"error": f"Invalid submission, fix and resubmit: {exc}"}))
                         continue
                     trace.append(ToolCallTrace(name=call.name, arguments={}, ok=True, duration_ms=0))
-                    return self._response(ctx, submission, step, trace, usage, started)
+                    return self._response(ctx, submission, tools.retrieved_sources, step, trace, usage, started)
 
                 output, ok, ms = await tools.execute(call.name, call.arguments)
                 trace.append(ToolCallTrace(name=call.name, arguments=call.arguments, ok=ok, duration_ms=ms))
@@ -83,17 +85,26 @@ class DraftAgent:
                 raise TicketNotFound(f"Ticket {ticket_id} not found") from exc
             raise
 
-    def _response(self, ctx: TicketContext, s: DraftSubmission, steps: int, trace: list[ToolCallTrace],
-                  usage: "_UsageTotal", started: float) -> DraftReplyResponse:
+    def _response(self, ctx: TicketContext, s: DraftSubmission, retrieved: set[str], steps: int,
+                  trace: list[ToolCallTrace], usage: "_UsageTotal", started: float) -> DraftReplyResponse:
         latency_ms = int((time.perf_counter() - started) * 1000)
+        # Grounding check: a citation only counts if that passage was really returned to the model.
+        cited = list(dict.fromkeys(s.sources))
+        sources = [c for c in cited if c in retrieved]
+        unverified = [c for c in cited if c not in retrieved]
+        note = s.internal_note.strip()
+        if unverified:
+            log.warning("ticket=%s dropped unverified citations %s", ctx.ticket_id, unverified)
+            note += f"\n[Citations removed because they were never retrieved: {', '.join(unverified)}]"
         log.info("ticket=%s draft done: steps=%d tools=%s latency_ms=%d tokens=%s", ctx.ticket_id, steps,
                  [t.name for t in trace], latency_ms, usage.value())
         return DraftReplyResponse(
             ticket_id=ctx.ticket_id,
             customer_reply=s.customer_reply.strip(),
-            internal_note=s.internal_note.strip(),
+            internal_note=note,
             suggested_actions=s.suggested_actions,
             confidence=round(min(max(s.confidence, 0.0), 1.0), 2),
+            sources=sources,
             steps=steps,
             tool_calls=trace,
             provider=self.model.name,

@@ -19,10 +19,11 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from app.agent.helpdesk_client import HelpdeskApi, HelpdeskApiError
-from app.agent.policies import PolicyLibrary
-from app.agent.schemas import PolicyTopic, SuggestedAction
+from app.agent.schemas import SuggestedAction
+from app.knowledge.base import KnowledgeBase
 
 SUBMIT_REPLY = "submit_reply"
+SEARCH_KNOWLEDGE_BASE = "search_knowledge_base"
 
 _ORDER_FIELDS = ("orderNumber", "productName", "amount", "status", "trackingNumber", "orderedAt")
 
@@ -88,10 +89,14 @@ TOOL_SPECS: list[ToolSpec] = [
     ToolSpec("get_ticket_history",
              "List this customer's other support tickets (subject, status, category) to spot repeat issues.",
              _object()),
-    ToolSpec("get_support_policy",
-             "Get the store's official policy text for a topic. Always check policy before stating "
-             "timelines, eligibility or what the store will do.",
-             _object({"topic": {"type": "string", "enum": [t.value for t in PolicyTopic]}})),
+    ToolSpec(SEARCH_KNOWLEDGE_BASE,
+             "Search the store's knowledge base (policies, product guides, troubleshooting, FAQs) by meaning. "
+             "Use it before stating any policy, timeline, eligibility rule or troubleshooting step. Returns the "
+             "best-matching passages, each with a 'source' id to cite. You may search several times with "
+             "different wording.",
+             _object({"query": {"type": "string",
+                                "description": "What you need to know, in plain words, e.g. "
+                                               "'headphones crackling sound warranty'"}})),
     ToolSpec(SUBMIT_REPLY,
              "Submit the final draft. Call exactly once, when you are done. A human agent reviews it before sending.",
              _object({
@@ -102,20 +107,24 @@ TOOL_SPECS: list[ToolSpec] = [
                                        "items": {"type": "string", "enum": [a.value for a in SuggestedAction]},
                                        "description": "Actions a human should consider; NO_ACTION if none"},
                  "confidence": {"type": "number", "description": "0.0-1.0: how sure you are the reply is correct"},
+                 "sources": {"type": "array", "items": {"type": "string"},
+                             "description": "The 'source' ids of the knowledge base passages your reply relies on"},
              })),
 ]
 
 
 class AgentTools:
-    def __init__(self, ctx: TicketContext, api: HelpdeskApi, policies: PolicyLibrary):
+    def __init__(self, ctx: TicketContext, api: HelpdeskApi, knowledge: KnowledgeBase, top_k: int = 4):
         self.ctx = ctx
         self._api = api
-        self._policies = policies
+        self._knowledge = knowledge
+        self._top_k = top_k
+        self.retrieved_sources: set[str] = set()  # every source id the model was actually shown
         self._handlers: dict[str, Callable[[dict[str, Any]], Awaitable[Any]]] = {
             "get_customer_orders": self._get_customer_orders,
             "get_order": self._get_order,
             "get_ticket_history": self._get_ticket_history,
-            "get_support_policy": self._get_support_policy,
+            SEARCH_KNOWLEDGE_BASE: self._search_knowledge_base,
         }
 
     @staticmethod
@@ -137,6 +146,8 @@ class AgentTools:
             result, ok = {"error": str(exc)}, False
         except (KeyError, TypeError, ValueError) as exc:
             result, ok = {"error": f"Invalid arguments for {name}: {exc}"}, False
+        except Exception as exc:  # e.g. embedding API or knowledge database unavailable
+            result, ok = {"error": f"{name} is temporarily unavailable: {exc}"}, False
         return result, ok, int((time.perf_counter() - started) * 1000)
 
     # ---- handlers -------------------------------------------------------------
@@ -164,9 +175,16 @@ class AgentTools:
         return [_pick(t, ("id", "subject", "status", "category", "createdAt"))
                 for t in tickets if t.get("id") != self.ctx.ticket_id]
 
-    async def _get_support_policy(self, args: dict[str, Any]) -> Any:
-        topic = PolicyTopic(args["topic"])
-        return {"topic": topic.value, "policy": self._policies.get(topic)}
+    async def _search_knowledge_base(self, args: dict[str, Any]) -> Any:
+        query = str(args["query"]).strip()
+        if not query:
+            raise ToolError("query must not be empty")
+        hits = await self._knowledge.search(query, self._top_k)
+        self.retrieved_sources.update(h.source for h in hits)
+        if not hits:
+            return {"results": [], "note": "Nothing relevant found. Don't guess: say the team will check."}
+        return {"results": [{"source": h.source, "title": h.title, "section": h.section, "text": h.text,
+                             "score": h.score} for h in hits]}
 
 
 class ToolError(Exception):

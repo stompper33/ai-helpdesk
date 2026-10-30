@@ -6,12 +6,21 @@ import pytest
 
 from app.agent.helpdesk_client import HelpdeskApiError
 from app.agent.models import AgentError, ModelTurn, ScriptedAgentModel, ToolCall
-from app.agent.policies import PolicyLibrary
 from app.agent.prompts import build_context_message
 from app.agent.runner import DraftAgent, TicketNotFound
 from app.agent.tools import TicketContext
+from app.knowledge.base import in_memory_keyword_base
 
-POLICIES = PolicyLibrary.from_markdown()
+
+
+def make_kb():
+    """Offline knowledge base over the real knowledge/ folder (BM25 keyword search, no API calls)."""
+    kb = in_memory_keyword_base()
+    asyncio.run(kb.sync())
+    return kb
+
+
+KB = make_kb()
 
 
 class FakeHelpdeskApi:
@@ -96,7 +105,7 @@ class FakeModel:
 
 def submit(**overrides):
     args = {"customer_reply": "Hi Bob, we'll sort this out. Customer Support Team", "internal_note": "n",
-            "suggested_actions": ["REPLACEMENT"], "confidence": 0.8}
+            "suggested_actions": ["REPLACEMENT"], "confidence": 0.8, "sources": []}
     args.update(overrides)
     return ToolCall("s", "submit_reply", args)
 
@@ -107,13 +116,13 @@ def run(agent, ticket_id=1):
 
 def test_scripted_agent_runs_tools_against_helpdesk_api():
     api = FakeHelpdeskApi()
-    result = run(DraftAgent(ScriptedAgentModel(), api, POLICIES))
+    result = run(DraftAgent(ScriptedAgentModel(), api, KB))
     assert [t.name for t in result.tool_calls] == [
-        "get_customer_orders", "get_ticket_history", "get_support_policy", "submit_reply"]
+        "get_customer_orders", "get_ticket_history", "search_knowledge_base", "submit_reply"]
     assert all(t.ok for t in result.tool_calls)
     assert api.calls == ["ticket:1", "orders:1", "history:1"]  # always scoped by ticket, never by customer id
     assert result.customer_reply.startswith("Hi Bob,")
-    assert "30 days" in result.customer_reply  # quoted from the returns policy
+    assert result.sources and "#" in result.sources[0]  # cites a knowledge base chunk id
     assert result.suggested_actions[0].value == "REPLACEMENT"
     assert result.steps == 2 and result.provider == "rules"
 
@@ -131,7 +140,7 @@ def test_other_customers_order_is_hidden_by_the_server():
         ModelTurn([ToolCall("a", "get_order", {"order_number": "ORD-10001"})]),  # belongs to customer 1
         ModelTurn([submit()]),
     ])
-    result = run(DraftAgent(model, FakeHelpdeskApi(), POLICIES))
+    result = run(DraftAgent(model, FakeHelpdeskApi(), KB))
     assert model.received[1][0].output == {"error": "Order ORD-10001 not found"}
     assert result.tool_calls[0].ok is False
 
@@ -142,7 +151,7 @@ def test_python_checks_still_protect_data_if_the_server_forgot_to_scope():
                    ToolCall("b", "get_customer_orders", {})]),
         ModelTurn([submit()]),
     ])
-    run(DraftAgent(model, FakeHelpdeskApi(scoping=False), POLICIES))
+    run(DraftAgent(model, FakeHelpdeskApi(scoping=False), KB))
     single, listing = (r.output for r in model.received[1])
     assert single == {"error": "Order ORD-10001 not found for this customer"}
     assert [o["orderNumber"] for o in listing] == ["ORD-10003"]  # Alice's ORD-10001 filtered out
@@ -152,10 +161,10 @@ def test_tool_errors_are_returned_to_the_model_not_raised():
     model = FakeModel([
         ModelTurn([ToolCall("a", "get_order", {"order_number": "ORD-404"}),
                    ToolCall("b", "no_such_tool", {}),
-                   ToolCall("c", "get_support_policy", {"topic": "nonsense"})]),
+                   ToolCall("c", "search_knowledge_base", {"query": "   "})]),
         ModelTurn([submit()]),
     ])
-    result = run(DraftAgent(model, FakeHelpdeskApi(), POLICIES))
+    result = run(DraftAgent(model, FakeHelpdeskApi(), KB))
     outputs = [r.output for r in model.received[1]]
     assert all("error" in o for o in outputs)
     assert result.customer_reply
@@ -166,7 +175,7 @@ def test_invalid_submission_is_sent_back_for_a_retry():
         ModelTurn([submit(suggested_actions=["DELETE_ACCOUNT"])]),
         ModelTurn([submit(confidence=1.4)]),
     ])
-    result = run(DraftAgent(model, FakeHelpdeskApi(), POLICIES))
+    result = run(DraftAgent(model, FakeHelpdeskApi(), KB))
     assert "Invalid submission" in model.received[1][0].output["error"]
     assert result.steps == 2
     assert result.confidence == 1.0  # clamped
@@ -175,18 +184,18 @@ def test_invalid_submission_is_sent_back_for_a_retry():
 def test_step_limit_stops_a_looping_model():
     model = FakeModel([ModelTurn([ToolCall(str(i), "get_ticket_history", {})]) for i in range(10)])
     with pytest.raises(AgentError, match="within 3 steps"):
-        run(DraftAgent(model, FakeHelpdeskApi(), POLICIES, max_steps=3))
+        run(DraftAgent(model, FakeHelpdeskApi(), KB, max_steps=3))
 
 
 def test_model_that_stops_talking_is_an_error():
     model = FakeModel([ModelTurn([], text="Here is my reply...")])
     with pytest.raises(AgentError, match="without calling submit_reply"):
-        run(DraftAgent(model, FakeHelpdeskApi(), POLICIES))
+        run(DraftAgent(model, FakeHelpdeskApi(), KB))
 
 
 def test_unknown_ticket():
     with pytest.raises(TicketNotFound):
-        run(DraftAgent(ScriptedAgentModel(), FakeHelpdeskApi(), POLICIES), ticket_id=99)
+        run(DraftAgent(ScriptedAgentModel(), FakeHelpdeskApi(), KB), ticket_id=99)
 
 
 def test_tool_schemas_are_strict_mode_compatible():
@@ -196,3 +205,25 @@ def test_tool_schemas_are_strict_mode_compatible():
         p = spec.parameters
         assert p["type"] == "object" and p["additionalProperties"] is False
         assert sorted(p["required"]) == sorted(p["properties"])
+
+
+def test_citations_that_were_never_retrieved_are_dropped():
+    model = FakeModel([
+        ModelTurn([ToolCall("a", "search_knowledge_base", {"query": "refund cancelled order charged"})]),
+        ModelTurn([submit(sources=["made-up/policy#refunds"])]),
+    ])
+    agent = DraftAgent(model, FakeHelpdeskApi(), KB)
+    result = run(agent)
+    returned = [r["source"] for r in model.received[1][0].output["results"]]
+    assert returned and result.sources == []
+    assert "made-up/policy#refunds" in result.internal_note
+
+
+def test_retrieved_citations_are_kept_and_deduplicated():
+    hits = asyncio.run(KB.search("refund cancelled order", 4))
+    model = FakeModel([
+        ModelTurn([ToolCall("a", "search_knowledge_base", {"query": "refund cancelled order"})]),
+        ModelTurn([submit(sources=[hits[0].source, hits[0].source])]),
+    ])
+    result = run(DraftAgent(model, FakeHelpdeskApi(), KB))
+    assert result.sources == [hits[0].source]

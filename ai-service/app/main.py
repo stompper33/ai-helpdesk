@@ -12,10 +12,12 @@ from fastapi.responses import JSONResponse
 
 from app.agent.helpdesk_client import HelpdeskApiError, HttpHelpdeskApi
 from app.agent.models import AgentError, AgentModel, OpenAIAgentModel, ScriptedAgentModel
-from app.agent.policies import PolicyLibrary
 from app.agent.runner import DraftAgent, TicketNotFound
 from app.agent.schemas import DraftReplyRequest, DraftReplyResponse
 from app.config import Settings, get_settings
+from app.knowledge.base import KnowledgeBase, in_memory_keyword_base
+from app.knowledge.embeddings import OpenAIEmbedder
+from app.knowledge.stores import InMemoryStore, PgVectorStore
 from app.schemas import HealthResponse, TriageRequest, TriageResponse
 from app.triage.classifiers import ClassifierError, OpenAIClassifier, RuleBasedClassifier, TicketClassifier
 from app.triage.service import TriageService
@@ -48,6 +50,14 @@ def build_agent_model(settings: Settings) -> AgentModel:
     return ScriptedAgentModel()
 
 
+def build_knowledge_base(settings: Settings) -> KnowledgeBase:
+    if settings.resolved_provider() == "openai":
+        embedder = OpenAIEmbedder(_require_key(settings), settings.embedding_model)
+        store = PgVectorStore(settings.knowledge_db_url) if settings.knowledge_db_url else InMemoryStore()
+        return KnowledgeBase(store, embedder)
+    return in_memory_keyword_base()
+
+
 def create_app(settings: Settings | None = None, classifier: TicketClassifier | None = None,
                agent: DraftAgent | None = None) -> FastAPI:
     """App factory. Tests pass their own settings/classifier/agent; production uses env config."""
@@ -61,15 +71,26 @@ def create_app(settings: Settings | None = None, classifier: TicketClassifier | 
     if agent is None:
         helpdesk_api = HttpHelpdeskApi(settings.helpdesk_api_url, settings.helpdesk_api_timeout_seconds,
                                        api_key=settings.helpdesk_api_key.get_secret_value())
-        agent = DraftAgent(build_agent_model(settings), helpdesk_api, PolicyLibrary.from_markdown(),
-                           max_steps=settings.agent_max_steps)
+        agent = DraftAgent(build_agent_model(settings), helpdesk_api, build_knowledge_base(settings),
+                           max_steps=settings.agent_max_steps, top_k=settings.knowledge_top_k)
+    knowledge = agent.knowledge
 
-    log.info("ai-service starting: triage provider=%s model=%s | agent provider=%s model=%s | helpdesk-api=%s",
+    log.info("ai-service starting: triage provider=%s model=%s | agent provider=%s model=%s | "
+             "knowledge %s/%s | helpdesk-api=%s",
              triage_service.classifier.name, triage_service.classifier.model,
-             agent.model.name, agent.model.model, settings.helpdesk_api_url)
+             agent.model.name, agent.model.model, knowledge.mode, knowledge.store.name, settings.helpdesk_api_url)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        # Stage 4: index the knowledge base (only new/changed chunks are embedded)
+        try:
+            await knowledge.store.open()
+            await knowledge.sync()
+        except Exception as exc:
+            log.error("knowledge base (%s/%s) unavailable, falling back to keyword search: %s",
+                      knowledge.mode, knowledge.store.name, exc)
+            await knowledge.fall_back_to_keyword()
+
         worker_task = None
         if settings.auto_triage_worker_enabled:
             worker = TriageWorker(settings.rabbitmq_url, triage_service,
@@ -85,6 +106,7 @@ def create_app(settings: Settings | None = None, classifier: TicketClassifier | 
                 pass
         if helpdesk_api is not None:
             await helpdesk_api.aclose()
+        await knowledge.store.close()
 
     app = FastAPI(
         title="Helpdesk AI Service",
@@ -127,6 +149,22 @@ def create_app(settings: Settings | None = None, classifier: TicketClassifier | 
     async def triage(req: TriageRequest) -> TriageResponse:
         """Classify a ticket: category, priority, sentiment, summary, reasoning and confidence."""
         return await triage_service.triage(req)
+
+    @app.get("/v1/knowledge/search", tags=["knowledge"], dependencies=[Depends(require_api_key)])
+    async def knowledge_search(q: str, k: int = 4) -> dict:
+        """Try the retrieval step on its own: what would the agent get back for this query?"""
+        hits = await knowledge.search(q, max(1, min(k, 10)))
+        return {"mode": knowledge.mode, "query": q,
+                "results": [{"source": h.source, "title": h.title, "section": h.section, "score": h.score,
+                             "text": h.text} for h in hits]}
+
+    @app.get("/v1/knowledge/stats", tags=["knowledge"], dependencies=[Depends(require_api_key)])
+    async def knowledge_stats() -> dict:
+        s = knowledge.last_sync
+        if s is None:
+            return {"mode": knowledge.mode, "store": knowledge.store.name, "synced": False}
+        return {"mode": s.mode, "store": s.store, "synced": True, "chunks": s.chunks, "embedded": s.embedded,
+                "unchanged": s.unchanged, "deleted": s.deleted, "durationMs": s.duration_ms}
 
     @app.post("/v1/agent/draft-reply", response_model=DraftReplyResponse, tags=["agent"],
               dependencies=[Depends(require_api_key)])

@@ -25,9 +25,18 @@ class Settings(BaseSettings):
     # Stage 3: the reply-drafting agent calls back into helpdesk-api for its tools
     helpdesk_api_url: str = "http://localhost:8080"
     helpdesk_api_timeout_seconds: float = 10.0
+    # Stage 5c: key for helpdesk-api's internal agent API. Same default as Java's
+    # helpdesk.internal-api.key so local runs work; docker-compose sets both.
+    helpdesk_api_key: SecretStr = SecretStr("local-dev-secret")
     agent_model: str | None = None  # defaults to openai_model
     agent_max_steps: int = 8
     agent_timeout_seconds: float = 30.0  # per model call
+
+    # Stage 4: knowledge base (RAG). With an OpenAI key: embeddings + pgvector (Docker) or memory.
+    # Without a key: keyword (BM25) search in memory.
+    knowledge_db_url: str | None = None  # e.g. postgresql://knowledge:knowledge@localhost:5432/knowledge
+    embedding_model: str = "text-embedding-3-small"
+    knowledge_top_k: int = 4
 
     # Stage 5b: consume ticket.created from RabbitMQ and publish ticket.triaged.
     # Off by default (no broker needed locally); docker-compose turns it on.
@@ -35,10 +44,6 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://helpdesk:helpdesk@localhost:5672/"
     worker_prefetch: int = 4
     worker_max_attempts: int = 3
-      
-    # Stage 5c: key for helpdesk-api's internal agent API. Same default as Java's
-    # helpdesk.internal-api.key so local runs work; docker-compose sets both.
-    helpdesk_api_key: SecretStr = SecretStr("local-dev-secret") 
 
     log_level: str = "INFO"
 

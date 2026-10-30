@@ -34,7 +34,7 @@ The first build takes a few minutes while Maven and pip download dependencies. A
 |---|---|---|
 | helpdesk-api | http://localhost:8080/swagger-ui.html | `docker` profile: PostgreSQL + Flyway |
 | ai-service | http://localhost:8000/docs | OpenAI if `ai-service/.env` has a key, offline rules otherwise |
-| PostgreSQL | `localhost:5432`, db/user/password `helpdesk` | data survives restarts (volume `pgdata`) |
+| PostgreSQL | `localhost:5432`, db/user/password `helpdesk` (and `knowledge`/`knowledge` for the knowledge base) | data survives restarts (volume `pgdata`) |
 | RabbitMQ | http://localhost:15672, user/password `helpdesk` | management UI: queues, message rates, dead-letter queues |
 
 Useful commands:
@@ -56,6 +56,29 @@ The Postman collections work unchanged. One difference: in Docker, Spring Boot a
 - Healthchecks: Spring Boot waits for Postgres to be healthy, and `docker compose ps` shows readiness for all three services.
 - Schema changes go through **Flyway migrations** (`db/migration/V1__init_schema.sql`), and Hibernate runs with `ddl-auto=validate`, so a mismatch between entities and schema stops startup instead of silently changing the database.
 - Containers talk to each other by service name (`http://ai-service:8000`, `http://helpdesk-api:8080`), configured purely through environment variables.
+
+## Stage 4: RAG, a knowledge base the agent searches
+
+The agent no longer looks up one of 7 fixed policy topics. It **searches a knowledge base by meaning**: 19 fictional documents (policies, product guides, FAQs, troubleshooting) in `ai-service/knowledge/`, split into about 100 chunks.
+
+```
+INDEXING (at startup; only new or edited chunks)
+  knowledge/**/*.md ─► split by "##" headings ─► OpenAI embeddings (1536 numbers per chunk)
+                                                   ─► PostgreSQL + pgvector, database "knowledge"
+
+RETRIEVAL (each search_knowledge_base call)
+  "left earcup crackles at high volume" ─► embed ─► 4 nearest chunks (cosine similarity, HNSW index)
+                                                   ─► products/aurora-headphones#crackling-popping-or-distorted-sound
+```
+
+- **Grounded, cited answers.** The prompt says policies and troubleshooting steps must come from search results, and the draft lists the `sources` it used. ai-service **drops any citation the agent never actually retrieved**, and the stored draft comment shows the sources, so the human reviewer can check them.
+- **Separate ownership.** One Postgres server, two databases: `helpdesk` (Java, Flyway) and `knowledge` (ai-service). The `knowledge` user can't connect to the business data. Created by `postgres/init/01-knowledge-db.sql`.
+- **Incremental indexing.** Each chunk stores a content hash, so editing one section re-embeds one chunk and deleted sections are removed.
+- **Works offline.** Without an OpenAI key (and in all tests), retrieval falls back to an in-memory BM25 keyword search. If the database or the embedding API is down at startup, the service logs it and falls back instead of failing.
+- **Measured.** `python -m scripts.eval_retrieval --mode both` runs 27 labelled questions, mostly worded differently from the documents ("my parcel never showed up" → shipping policy), and reports recall@k and MRR for keyword vs. vector search. Keyword baseline: recall@1 0.59, recall@3 0.82.
+- **Hand-rolled on purpose.** Chunking, embedding and search are about 300 lines in `ai-service/app/knowledge/`, so every step is visible. For many file formats or sources, LlamaIndex/LangChain (Python) or Spring AI (Java) provide loaders and splitters.
+
+Try retrieval on its own: `GET http://localhost:8000/v1/knowledge/search?q=watch stuck on logo` (with `X-Api-Key`). Postman: `helpdesk-knowledge-stage4.postman_collection.json`.
 
 ## Stage 5b: automatic triage over RabbitMQ
 
@@ -260,7 +283,8 @@ All errors use RFC 9457 Problem Details JSON with a stable `code` field. The AI 
 ## Project layout
 
 ```
-docker-compose.yml   postgres + rabbitmq + helpdesk-api + ai-service
+docker-compose.yml   postgres (pgvector) + rabbitmq + helpdesk-api + ai-service
+postgres/init/       creates the "knowledge" database + user and the vector extension (first start)
 .env.example         optional compose overrides (shared secret, DB credentials, port)
 
 helpdesk-api/
@@ -285,7 +309,7 @@ helpdesk-api/src/main/java/com/helpdesk
 ai-service/
 ├── Dockerfile
 ├── app/          FastAPI app, schemas, settings, triage/ (classifier), agent/ (tool-using agent), worker/ (RabbitMQ consumer)
-├── knowledge/    support policies the agent looks up
+├── knowledge/    19 markdown documents the agent searches (policies, products, FAQs, troubleshooting)
 ├── tests/        pytest (no network)
 ├── evals/        labelled tickets for measuring triage quality
 └── scripts/      eval runner
@@ -296,7 +320,7 @@ ai-service/
 - [x] **Stage 1**: business API, rules, seed data, tests, Postman collection
 - [x] **Stage 2**: Python `ai-service` (FastAPI + OpenAI structured outputs). Java calls it to triage tickets, with a confidence threshold, preview mode, audit comments, and an eval set
 - [x] **Stage 3**: agent with tools. The Python agent calls read-only, customer-scoped Java endpoints (orders, ticket history) and a policy library, then drafts a reply stored as an internal `AI` comment for human approval
-- [ ] **Stage 4**: RAG over a knowledge base of FAQ and policy docs
+- [x] **Stage 4**: RAG: 19-document knowledge base, pgvector in its own database, incremental indexing, verified citations, retrieval eval (recall@k)
 - [x] **Stage 5a**: Docker Compose (Postgres + both services), Flyway migrations, healthchecks, secrets via env
 - [x] **Stage 5b**: async auto-triage over RabbitMQ: publish after commit, idempotent consumer, retries with backoff, dead-letter queues
 - [x] **Stage 5c**: approval queue for AI-proposed actions (executed by Java, optimistic locking, audit), authenticated + server-scoped internal API for the agent

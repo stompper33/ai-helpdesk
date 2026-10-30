@@ -1,6 +1,6 @@
 # Runs the whole system with one command:   docker compose up --build
 #
-#   postgres      :5432   database (data kept in the "pgdata" volume)
+#   postgres      :5432   PostgreSQL + pgvector: databases "helpdesk" (Java) and "knowledge" (AI)
 #   rabbitmq      :5672   message broker; management UI on http://localhost:15672
 #   helpdesk-api  :8080   Spring Boot, "docker" profile -> PostgreSQL + Flyway
 #   ai-service    :8000   FastAPI; reads OPENAI_API_KEY from ai-service/.env
@@ -11,7 +11,8 @@ name: helpdesk
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # Postgres 17 with the pgvector extension (stage 4: the knowledge base's vector search)
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: helpdesk
       POSTGRES_USER: ${DB_USER:-helpdesk}
@@ -20,8 +21,11 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # creates the "knowledge" database + user on first start (empty volume only)
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d helpdesk"]
+      # -h localhost: check over TCP, so it only passes after first-start init scripts have finished
+      test: ["CMD-SHELL", "pg_isready -h localhost -U $${POSTGRES_USER} -d helpdesk"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -82,6 +86,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     env_file:
       # Your existing file with OPENAI_API_KEY. Optional: without it the offline rules are used.
       - path: ./ai-service/.env
@@ -92,6 +98,8 @@ services:
       SERVICE_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
       # Stage 5c: sent as X-Api-Key when the agent's tools call helpdesk-api's internal API
       HELPDESK_API_KEY: ${SERVICE_API_KEY:-local-dev-secret}
+      # Stage 4: knowledge base in its own database (only used when an OpenAI key is set)
+      KNOWLEDGE_DB_URL: postgresql://knowledge:knowledge@postgres:5432/knowledge
       # Stage 5b: consume ticket.created, publish ticket.triaged
       AUTO_TRIAGE_WORKER_ENABLED: "true"
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-helpdesk}:${RABBITMQ_PASSWORD:-helpdesk}@rabbitmq:5672/

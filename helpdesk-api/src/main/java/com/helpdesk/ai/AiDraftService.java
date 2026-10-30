@@ -92,10 +92,13 @@ public class AiDraftService {
                         ---
                         Suggested actions: %s (each one waits for human approval in /api/actions)
                         Agent notes: %s
+                        Sources: %s
                         Tools used: %s
                         (confidence %.2f, %d steps, %s via %s, %d ms)""",
                 d.customerReply(), actions.isEmpty() ? "none" : String.join(", ", actions),
-                d.internalNote(), tools.isEmpty() ? "none" : tools,
+                d.internalNote(),
+                d.sources() == null || d.sources().isEmpty() ? "none" : String.join(", ", d.sources()),
+                tools.isEmpty() ? "none" : tools,
                 d.confidence(), d.steps(), d.model(), d.provider(), d.latencyMs());
         return text.length() <= MAX_COMMENT_LENGTH ? text : text.substring(0, MAX_COMMENT_LENGTH - 3) + "...";
     }

@@ -1,0 +1,137 @@
+[
+ {
+  "id": "r01",
+  "query": "my left earcup makes a crackling noise when I turn the volume up",
+  "expectedDoc": "products/aurora-headphones"
+ },
+ {
+  "id": "r02",
+  "query": "second screen stays black when plugged into the dock",
+  "expectedDoc": "products/nimbus-dock"
+ },
+ {
+  "id": "r03",
+  "query": "the E key does nothing when I press it",
+  "expectedDoc": "products/keystone-keyboard"
+ },
+ {
+  "id": "r04",
+  "query": "screen says no input detected",
+  "expectedDoc": "products/vista-monitor"
+ },
+ {
+  "id": "r05",
+  "query": "watch froze during an update and only shows the logo",
+  "expectedDoc": "products/pulse-watch"
+ },
+ {
+  "id": "r06",
+  "query": "laptop is completely dead and won't power up",
+  "expectedDoc": "products/stratus-laptop"
+ },
+ {
+  "id": "r07",
+  "query": "phone cover doesn't fit my phone",
+  "expectedDoc": "products/accessories"
+ },
+ {
+  "id": "r08",
+  "query": "I was billed even though I called off my order",
+  "expectedDoc": "policies/refunds"
+ },
+ {
+  "id": "r09",
+  "query": "money taken from my card twice for the same purchase",
+  "expectedDoc": "policies/refunds"
+ },
+ {
+  "id": "r10",
+  "query": "my parcel never showed up but the website says it arrived",
+  "expectedDoc": "policies/shipping"
+ },
+ {
+  "id": "r11",
+  "query": "tracking has been stuck for a week",
+  "expectedDoc": "policies/shipping"
+ },
+ {
+  "id": "r12",
+  "query": "can I send back something I don't want anymore",
+  "expectedDoc": "policies/returns"
+ },
+ {
+  "id": "r13",
+  "query": "the product came smashed in the box",
+  "expectedDoc": "policies/returns"
+ },
+ {
+  "id": "r14",
+  "query": "is it still covered if it breaks after 6 months",
+  "expectedDoc": "policies/warranty"
+ },
+ {
+  "id": "r15",
+  "query": "someone got into my account and bought stuff",
+  "expectedDoc": "policies/account-security"
+ },
+ {
+  "id": "r16",
+  "query": "never got the email to change my password",
+  "expectedDoc": "policies/account-security"
+ },
+ {
+  "id": "r17",
+  "query": "what time can I reach you",
+  "expectedDoc": "policies/general"
+ },
+ {
+  "id": "r18",
+  "query": "need a receipt with my business tax number",
+  "expectedDoc": "faq/orders-and-payment"
+ },
+ {
+  "id": "r19",
+  "query": "do I have to pay import fees in Canada",
+  "expectedDoc": "faq/international-shipping"
+ },
+ {
+  "id": "r20",
+  "query": "how do I close my account and erase my data",
+  "expectedDoc": "faq/account-and-data"
+ },
+ {
+  "id": "r21",
+  "query": "lost my phone and can't log in with the authenticator codes",
+  "expectedDoc": "faq/account-and-data"
+ },
+ {
+  "id": "r22",
+  "query": "does a present card ever run out",
+  "expectedDoc": "faq/gift-cards-and-promotions"
+ },
+ {
+  "id": "r23",
+  "query": "my wireless earbuds keep dropping the connection",
+  "expectedDoc": "troubleshooting/bluetooth"
+ },
+ {
+  "id": "r24",
+  "query": "is it safe to install the new software on my gadget",
+  "expectedDoc": "troubleshooting/firmware-updates"
+ },
+ {
+  "id": "r25",
+  "query": "the monitor only shows 30 frames per second and the mouse lags",
+  "expectedDoc": "products/vista-monitor"
+ },
+ {
+  "id": "r26",
+  "query": "the keyboard types every letter twice",
+  "expectedDoc": "products/keystone-keyboard"
+ },
+ {
+  "id": "r27",
+  "query": "battery dies in two days on my watch",
+  "expectedDoc": "products/pulse-watch"
+ }
+]
