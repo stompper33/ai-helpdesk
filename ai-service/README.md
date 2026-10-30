@@ -81,7 +81,9 @@ python -m scripts.eval_retrieval --mode both     # stage 4: keyword vs embedding
 python -m scripts.index_knowledge                # re-index after editing knowledge/ (also runs at startup)
 ```
 
-The eval runs 14 labelled tickets (`evals/triage_cases.json`) and reports category accuracy, priority accuracy and "priority within one level". The keyword baseline scores about 86% on category and 43% on priority, and it falls for the prompt-injection case (e13). Comparing that with the model's score shows what the LLM adds, and re-running it after any prompt change tells you whether you made things better or worse.
+The eval runs 14 labelled tickets (`evals/triage_cases.json`) and reports category accuracy, priority accuracy and "priority within one level". Results so far (prompt v2, 3 runs): the LLM scores 100% on category, 79% exact priority and 100% within one level, against 86% / 43% / 93% for the keyword baseline, and it resists the prompt-injection case (e13), which fools the keyword rules. Re-run it after any prompt change to see whether you made things better or worse.
+
+The retrieval eval (`scripts.eval_retrieval`) scores the knowledge base search on 27 labelled questions: recall@1 96% with embeddings vs. 59% with keyword search.
 
 ## Configuration (`.env`)
 
@@ -139,7 +141,7 @@ Design points worth mentioning:
 `POST /v1/agent/draft-reply` with `{"ticketId": 1}`. Spring Boot must be running, because the agent's tools call it.
 
 1. Load the ticket from Spring Boot's internal agent API (`GET /internal/agent/tickets/{id}`, with the service key). System notes, earlier AI output and the customer's email are left out.
-2. Send it to the model along with five tool definitions: `get_customer_orders`, `get_order`, `get_ticket_history`, `get_support_policy` and `submit_reply`.
+2. Send it to the model along with five tool definitions: `get_customer_orders`, `get_order`, `get_ticket_history`, `search_knowledge_base` and `submit_reply`.
 3. Loop: the model asks for tools, we run them (HTTP calls to Spring Boot, or a policy lookup) and send back the results. `tool_choice="required"` means the only way out is `submit_reply`.
 4. Validate the submission with pydantic. If it's invalid, the error goes back to the model to fix. Then return the draft plus a trace of every tool call.
 
